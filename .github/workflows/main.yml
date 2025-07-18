@@ -1,48 +1,32 @@
-name: Daily Stock Tracker
+name: Jamaican Stock Tracker
 on:
   schedule:
     - cron: '0 18 * * *'  # 1 PM Jamaica time
-  workflow_dispatch:  # Allows manual runs
+  workflow_dispatch:
 
 jobs:
-  scrape-and-report:
+  track:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          sudo apt-get install -y python3-tk  # For matplotlib
-
-      - name: Run scraper
-        run: python scraper.py
-
-      - name: Generate report
-        run: python report.py
-
-      - name: Upload report
-        uses: actions/upload-artifact@v3
+          python-version: "3.9"
+      - run: pip install -r requirements.txt
+      - run: python scraper.py
+      - uses: actions/upload-artifact@v3
         with:
-          name: stock-report
-          path: report.pdf
-
-      - name: Send email
-        if: github.event_name == 'schedule'  # Only on scheduled runs
-        uses: dawidd6/action-send-mail@v3
+          name: stock-data
+          path: data/
+      - uses: dawidd6/action-send-mail@v3
+        if: github.event_name == 'schedule'
         with:
           server_address: smtp.gmail.com
           server_port: 587
           username: ${{ secrets.EMAIL_USER }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Weekly Stock Report - ${{ steps.date.outputs.date }}"
-          body: "Attached is your automated stock report."
+          subject: "Jamaican Stock Report - $(date +'%Y-%m-%d')"
+          body: "Attached: CEO tweets, Reddit discussions, and news."
           to: ${{ secrets.EMAIL_USER }}
-          from: GitHub Actions
-          attachments: report.pdf
+          from: "GitHub Actions"
+          attachments: data/*.csv
