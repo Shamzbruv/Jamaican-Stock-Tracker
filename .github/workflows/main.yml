@@ -1,32 +1,82 @@
 name: Jamaican Stock Tracker
 on:
   schedule:
-    - cron: '0 18 * * *'  # 1 PM Jamaica time
+    - cron: '0 18 * * 1-5'  # 1PM Jamaica time, Mon-Fri (when markets are open)
   workflow_dispatch:
 
 jobs:
   track:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # Prevent hanging
+    env:
+      TZ: America/Jamaica  # Set timezone for proper scheduling
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.9"
-      - run: pip install -r requirements.txt
-      - run: python scraper.py
-      - uses: actions/upload-artifact@v3
+          python-version: "3.10"
+          cache: 'pip'  # Faster installs
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          sudo apt-get install -y python3-dev libxml2-dev libxslt-dev  # For news parsing
+
+      - name: Run scraper
+        run: |
+          mkdir -p logs
+          python scraper.py > logs/scraper_$(date +%Y%m%d).log 2>&1
+
+      - name: Archive data
+        uses: actions/upload-artifact@v3
         with:
-          name: stock-data
-          path: data/
-      - uses: dawidd6/action-send-mail@v3
-        if: github.event_name == 'schedule'
+          name: stock-data-${{ github.run_id }}
+          path: |
+            data/*.csv
+            logs/*.log
+          retention-days: 7
+
+      - name: Send email report
+        if: github.event_name == 'schedule'  # Only on scheduled runs
+        uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
           server_port: 587
           username: ${{ secrets.EMAIL_USER }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Jamaican Stock Report - $(date +'%Y-%m-%d')"
-          body: "Attached: CEO tweets, Reddit discussions, and news."
+          subject: "Stock Report - $(date +'%Y-%m-%d')"
+          body: |
+            Jamaican Stock Tracker Report
+            
+            - 📈 Processed ${{ steps.data.outputs.count }} records
+            - 📝 View full logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            See attached data files.
           to: ${{ secrets.EMAIL_USER }}
-          from: "GitHub Actions"
+          from: GitHub Actions
           attachments: data/*.csv
+
+      - name: Slack notification
+        if: always()  # Runs even if previous steps fail
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "Stock tracker ${{ job.status }}: ${{ github.repository }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Jamaican Stock Tracker* \nStatus: ${{ job.status }}\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}  # Optional
