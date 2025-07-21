@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import matplotlib.pyplot as plt
 from fpdf import FPDF
@@ -8,8 +9,14 @@ def generate_report():
     print("📊 Generating report...")
     today = datetime.date.today()
     
+    # Check if prices file exists
+    prices_file = f"data/prices_{today}.csv"
+    if not os.path.exists(prices_file):
+        print(f"❌ {prices_file} not found, skipping report generation")
+        return
+    
     # Load all data
-    prices = pd.read_csv(f"data/prices_{today}.csv")
+    prices = pd.read_csv(prices_file)
     twitter = pd.read_csv(f"data/twitter_{today}.csv") if os.path.exists(f"data/twitter_{today}.csv") else None
     reddit = pd.read_csv(f"data/reddit_{today}.csv") if os.path.exists(f"data/reddit_{today}.csv") else None
     
@@ -21,7 +28,7 @@ def generate_report():
     
     # Price chart
     plt.figure(figsize=(12, 6))
-    prices["Close"] = prices["Close"].astype(float)
+    prices["Close"] = pd.to_numeric(prices["Close"], errors="coerce").fillna(0)
     prices.plot(x="Symbol", y="Close", kind="bar", color="#1f77b4")
     plt.title("Stock Prices", pad=20)
     plt.ylabel("Price (JMD)")
@@ -37,13 +44,20 @@ def generate_report():
         pdf.cell(0, 10, "Social Media Mentions", 0, 1)
         
         # Word cloud
-        all_text = " ".join(twitter["Text"].tolist() + reddit["Text"].tolist())
-        wordcloud = WordCloud(width=800, height=400).generate(all_text)
-        wordcloud.to_file("wordcloud.png")
-        pdf.image("wordcloud.png", x=25, y=120, w=160)
+        all_text = " ".join(twitter["Text"].tolist() if twitter is not None else []) + \
+                   " ".join((reddit["Title"] + " " + reddit["Content"]).tolist() if reddit is not None else [])
+        if all_text.strip():
+            wordcloud = WordCloud(width=800, height=400).generate(all_text)
+            wordcloud.to_file("wordcloud.png")
+            pdf.image("wordcloud.png", x=25, y=120, w=160)
     
-    pdf.output("report.pdf")
-    print("✅ Report generated!")
+    try:
+        pdf.output("report.pdf")
+        print("✅ Report generated!")
+    except Exception as e:
+        print(f"❌ Failed to generate report: {str(e)}")
 
 if __name__ == "__main__":
+    os.makedirs("data", exist_ok=True)
+    os.makedirs("reports", exist_ok=True)
     generate_report()
