@@ -9,19 +9,24 @@ import praw
 import feedparser
 from dotenv import load_dotenv
 import logging
+import logging.handlers
 
-# Configure logging
+# Configure logging with rotation
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('scraper.log'),
+        logging.handlers.RotatingFileHandler('scraper.log', maxBytes=10*1024*1024, backupCount=5),
         logging.StreamHandler()
     ]
 )
 
 # Load environment variables
 load_dotenv()
+
+# Create directories
+os.makedirs("data", exist_ok=True)
+os.makedirs("reports", exist_ok=True)
 
 # Constants
 STOCKS = ["SCI", "DTC", "FESCO", "GHL", "TBCL", "DOLLA", "ONE", "TJH"]
@@ -36,10 +41,10 @@ NEWS_SOURCES = [
     "https://www.radiojamaicanewsonline.com/rss"
 ]
 
-# Rate limiting (requests per minute)
+# Rate limiting (requests per minute, conservative for free tier)
 RATE_LIMITS = {
-    'reddit': 60,
-    'twitter': 450,
+    'reddit': 60,   # Reddit allows 60 requests/minute
+    'twitter': 20,  # Twitter free tier: ~300/15min ≈ 20/min
     'news': 30
 }
 
@@ -74,24 +79,31 @@ class Scraper:
             table = soup.find("table", {"class": "trade-summary-table"})
             
             if not table:
-                raise ValueError("No table found on JamStockEx page")
+                logging.warning("Primary table not found, trying alternative")
+                table = soup.find("table")
+                if not table:
+                    raise ValueError("No table found on JamStockEx page")
 
             data = []
             for row in table.find_all("tr")[1:]:
                 cols = row.find_all("td")
                 if len(cols) >= 6:
+                    try:
+                        volume = int(cols[5].text.strip().replace(",", ""))
+                    except ValueError:
+                        volume = 0
+                        logging.warning(f"Invalid volume for {cols[0].text.strip()}")
                     data.append({
                         "Symbol": cols[0].text.strip(),
                         "Open": cols[1].text.strip(),
                         "High": cols[2].text.strip(),
                         "Low": cols[3].text.strip(),
                         "Close": cols[4].text.strip(),
-                        "Volume": cols[5].text.strip().replace(",", ""),
+                        "Volume": volume,
                         "Timestamp": datetime.datetime.now().isoformat()
                     })
 
             df = pd.DataFrame(data)
-            os.makedirs("data", exist_ok=True)
             df.to_csv(f"data/prices_{datetime.date.today()}.csv", index=False)
             logging.info(f"Saved JamStockEx data for {len(data)} stocks")
 
@@ -111,9 +123,10 @@ class Scraper:
             client = tweepy.Client(bearer_token=bearer_token)
             tweets_data = []
 
-            # Build comprehensive search queries
+            # Build targeted search queries
             queries = [
-                *[f"${stock} OR {stock} OR {ceo}" for stock in STOCKS for ceo in CEOS.get(stock, [])],
+                *[f"from:{ceo[2]} {stock}" for stock in STOCKS for ceo in CEOS.get(stock, []) if ceo[2].startswith('@')],
+                *[f"${stock} lang:en" for stock in STOCKS],
                 '"Jamaica stock market" OR "JSE" OR "Kingston finance"'
             ]
 
@@ -121,7 +134,7 @@ class Scraper:
                 self._rate_limit('twitter')
                 try:
                     tweets = client.search_recent_tweets(
-                        query=query + " lang:en -is:retweet -is:reply",
+                        query=query + " -is:retweet -is:reply",
                         max_results=100,
                         tweet_fields=["created_at", "author_id", "public_metrics", "context_annotations"],
                         expansions=["author_id"]
@@ -140,7 +153,11 @@ class Scraper:
                                 "Query": query
                             })
 
-                except Exception as e:
+                except tweepy.TweepyException as e:
+                    if "429" in str(e):  # Rate limit error
+                        logging.error(f"Twitter rate limit hit for query '{query}', waiting...")
+                        time.sleep(15 * 60)  # Wait 15 minutes
+                        continue
                     logging.error(f"Twitter query '{query}' failed: {str(e)}")
                     continue
 
@@ -164,33 +181,36 @@ class Scraper:
             )
 
             reddit_data = []
+            subreddits = ["investing", "stocks"]  # Targeted subreddits
             for stock in STOCKS:
                 self._rate_limit('reddit')
                 search_terms = f"{stock} OR {' OR '.join(CEOS.get(stock, []))}"
                 
-                try:
-                    for submission in reddit.subreddit("all").search(
-                        query=search_terms,
-                        limit=100,
-                        sort="new",
-                        time_filter="month"
-                    ):
-                        reddit_data.append({
-                            "Platform": "Reddit",
-                            "Stock": stock,
-                            "Title": submission.title,
-                            "Content": submission.selftext,
-                            "Author": submission.author.name if submission.author else "[deleted]",
-                            "Subreddit": submission.subreddit.display_name,
-                            "Upvotes": submission.score,
-                            "Comments": submission.num_comments,
-                            "URL": f"https://reddit.com{submission.permalink}",
-                            "Timestamp": datetime.datetime.fromtimestamp(submission.created_utc).isoformat()
-                        })
+                for subreddit in subreddits:
+                    try:
+                        for submission in reddit.subreddit(subreddit).search(
+                            query=search_terms,
+                            limit=100,
+                            sort="new",
+                            time_filter="month"
+                        ):
+                            if submission.selftext and submission.selftext != "[deleted]":
+                                reddit_data.append({
+                                    "Platform": "Reddit",
+                                    "Stock": stock,
+                                    "Title": submission.title,
+                                    "Content": submission.selftext,
+                                    "Author": submission.author.name if submission.author else "[deleted]",
+                                    "Subreddit": submission.subreddit.display_name,
+                                    "Upvotes": submission.score,
+                                    "Comments": submission.num_comments,
+                                    "URL": f"https://reddit.com{submission.permalink}",
+                                    "Timestamp": datetime.datetime.fromtimestamp(submission.created_utc).isoformat()
+                                })
 
-                except Exception as e:
-                    logging.error(f"Reddit search for {stock} failed: {str(e)}")
-                    continue
+                    except Exception as e:
+                        logging.error(f"Reddit search for {stock} in r/{subreddit} failed: {str(e)}")
+                        continue
 
             if reddit_data:
                 df = pd.DataFrame(reddit_data)
@@ -204,17 +224,21 @@ class Scraper:
     def scrape_news(self):
         """Scrape Jamaican news sources"""
         logging.info("Starting news scrape")
+        feedparser.PARSE_TIMEOUT = 10  # Set timeout for RSS parsing
         news_data = []
         
         for url in NEWS_SOURCES:
             self._rate_limit('news')
             try:
                 feed = feedparser.parse(url)
+                if feed.bozo:
+                    logging.error(f"Invalid feed {url}: {feed.bozo_exception}")
+                    continue
                 for entry in feed.entries:
                     for stock in STOCKS:
-                        # Check stock ticker or CEO names in title/content
-                        if (stock in entry.title or 
-                            any(ceo in entry.title for ceo in CEOS.get(stock, [])):
+                        if (stock.lower() in entry.title.lower() or 
+                            any(ceo.lower() in entry.title.lower() for ceo in CEOS.get(stock, [])) or
+                            stock.lower() in entry.get("summary", "").lower()):
                             news_data.append({
                                 "Platform": "News",
                                 "Source": feed.feed.get("title", url),
