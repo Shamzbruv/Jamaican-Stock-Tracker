@@ -10,6 +10,11 @@ jobs:
     timeout-minutes: 30  # Prevent hanging
     env:
       TZ: America/Jamaica  # Set timezone for proper scheduling
+      TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+      REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+      REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
 
     steps:
       - name: Checkout code
@@ -32,6 +37,14 @@ jobs:
           mkdir -p logs
           python scraper.py > logs/scraper_$(date +%Y%m%d).log 2>&1
 
+      - name: Generate report
+        run: |
+          python report.py > logs/report_$(date +%Y%m%d).log 2>&1
+
+      - name: Send Discord notification
+        run: |
+          python notifier.py > logs/notifier_$(date +%Y%m%d).log 2>&1
+
       - name: Archive data
         uses: actions/upload-artifact@v3
         with:
@@ -41,28 +54,6 @@ jobs:
             report.pdf
             logs/*.log
           retention-days: 7
-
-      - name: Send email report
-        if: github.event_name == 'schedule'  # Only on scheduled runs
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 587
-          username: ${{ secrets.EMAIL_USER }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Stock Report - $(date +'%Y-%m-%d')"
-          body: |
-            Jamaican Stock Tracker Report
-            
-            - 📈 Processed data
-            - 📝 View full logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            
-            See attached data files.
-          to: ${{ secrets.EMAIL_USER }}
-          from: GitHub Actions
-          attachments: |
-            data/*.csv
-            report.pdf
 
       - name: Slack notification
         if: always() && env.SLACK_WEBHOOK_URL
