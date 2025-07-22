@@ -9,61 +9,73 @@ load_dotenv()
 
 class DiscordNotifier:
     def __init__(self):
-        self.webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-        if not self.webhook_url:
-            raise ValueError("DISCORD_WEBHOOK_URL not set in .env")
+        self.alert_webhook_url = os.getenv("ALERT_WEBHOOK_URL")
+        self.email_webhook_url = os.getenv("EMAIL_WEBHOOK_URL")
+        if not self.alert_webhook_url or not self.email_webhook_url:
+            raise ValueError("Discord webhook URLs not set in .env")
         
-    def create_embed(self):
-        """Build rich Discord embed"""
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
+    def send_daily_alert(self):
+        webhook = DiscordWebhook(url=self.alert_webhook_url)
         embed = DiscordEmbed(
-            title=f"📊 Jamaican Stock Report - {today}",
+            title="Daily Research Alert",
+            description="Research has been done for the day.",
             color=0x00ff00  # Green
         )
+        webhook.add_embed(embed)
+        try:
+            response = webhook.execute()
+            return response.status_code == 200
+        except Exception as e:
+            print(f"❌ Failed to send daily alert: {str(e)}")
+            return False
+
+    def send_friday_analysis(self):
+        webhook = DiscordWebhook(url=self.email_webhook_url)
+        today = datetime.now().strftime("%Y-%m-%d")
+        embed = DiscordEmbed(
+            title=f"Friday Detailed Analysis - {today}",
+            color=0xffa500  # Orange
+        )
         
-        # Add market data
+        # Load data for analysis
         prices_file = f"data/prices_{today}.csv"
-        price_changes = []
         if os.path.exists(prices_file):
             df = pd.read_csv(prices_file)
+            analysis = "Detailed stock price analysis:\n"
             for _, row in df.iterrows():
-                try:
-                    open_price = float(row['Open'])
-                    close_price = float(row['Close'])
-                    change = ((close_price - open_price) / open_price) * 100 if open_price != 0 else 0
-                    arrow = "▲" if change > 0 else "▼"
-                    price_changes.append(
-                        f"{row['Symbol']}: {arrow}{abs(change):.2f}% (${close_price})"
-                    )
-                except (ValueError, ZeroDivisionError):
-                    price_changes.append(f"{row['Symbol']}: Invalid data")
+                analysis += f"{row['Symbol']}: Close ${row['Close']}, Volume {row['Volume']}\n"
+            embed.add_embed_field(
+                name="Stock Prices",
+                value=analysis,
+                inline=False
+            )
         
-        embed.add_embed_field(
-            name="💹 Today's Movers",
-            value="\n".join(price_changes) or "No price data available",
-            inline=False
-        )
+        # Add more analysis as needed (e.g., from twitter, reddit)
+        twitter_file = f"data/twitter_{today}.csv"
+        if os.path.exists(twitter_file):
+            twitter_df = pd.read_csv(twitter_file)
+            twitter_count = len(twitter_df)
+            embed.add_embed_field(
+                name="Twitter Mentions",
+                value=f"{twitter_count} mentions today",
+                inline=True
+            )
         
-        # Add social stats
-        twitter_count = len(pd.read_csv(f"data/twitter_{today}.csv")) if os.path.exists(f"data/twitter_{today}.csv") else 0
-        reddit_count = len(pd.read_csv(f"data/reddit_{today}.csv")) if os.path.exists(f"data/reddit_{today}.csv") else 0
-        embed.add_embed_field(
-            name="📱 Social Activity",
-            value=f"• {twitter_count} Twitter mentions\n"
-                  f"• {reddit_count} Reddit discussions",
-            inline=True
-        )
+        reddit_file = f"data/reddit_{today}.csv"
+        if os.path.exists(reddit_file):
+            reddit_df = pd.read_csv(reddit_file)
+            reddit_count = len(reddit_df)
+            embed.add_embed_field(
+                name="Reddit Discussions",
+                value=f"{reddit_count} discussions today",
+                inline=True
+            )
         
-        embed.set_footer(text="Automated Report | Data updates daily at 1PM Jamaica Time")
-        return embed
+        embed.set_footer(text="Automated Friday Analysis | Data updates weekly")
 
-    def send_report(self):
-        """Send rich notification with file attachments"""
-        webhook = DiscordWebhook(url=self.webhook_url)
-        embed = self.create_embed()
         webhook.add_embed(embed)
         
-        # Attach latest report
+        # Attach report.pdf if exists
         report_file = "report.pdf"
         if os.path.exists(report_file):
             with open(report_file, "rb") as f:
@@ -73,8 +85,15 @@ class DiscordNotifier:
             response = webhook.execute()
             return response.status_code == 200
         except Exception as e:
-            print(f"❌ Failed to send Discord notification: {str(e)}")
+            print(f"❌ Failed to send Friday analysis: {str(e)}")
             return False
+
+    def send_report(self):
+        today = datetime.now()
+        if today.weekday() == 4:  # Friday (0=Monday, 4=Friday)
+            return self.send_friday_analysis()
+        else:
+            return self.send_daily_alert()
 
 if __name__ == "__main__":
     notifier = DiscordNotifier()
