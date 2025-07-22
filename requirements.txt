@@ -1,41 +1,27 @@
 # Core dependencies
-pandas==2.2.1
-numpy==1.26.4
-python-dotenv==1.0.1
+pandas>=2.2.1
+numpy>=1.26.4
+python-dotenv>=1.0.1
 
 # Web scraping
-beautifulsoup4==4.12.3
-requests==2.31.0
-lxml==5.2.1
-feedparser==6.0.11
+beautifulsoup4>=4.12.3
+requests>=2.31.0
+lxml>=5.2.1
+feedparser>=6.0.11
 
 # Twitter API
-tweepy==4.14.0
-oauthlib==3.2.2
+tweepy>=4.14.0
+oauthlib>=3.2.2
 
 # Reddit API
-praw==7.7.1
-prawcore==2.4.0
-
-# Data visualization
-matplotlib==3.8.3
-seaborn==0.13.2
-plotly==5.18.0
+praw>=7.7.1
+prawcore>=2.4.0
 
 # PDF generation
-reportlab==4.1.0
-fpdf2==2.7.7
-
-# Advanced analytics
-scipy==1.12.0
-textblob==0.17.1
-nltk==3.8.1
-
-# Database (optional)
-psycopg2-binary==2.9.9
-sqlalchemy==2.0.25
+reportlab>=4.1.0
+fpdf2>=2.7.7
 
 # Utilities
-tqdm==4.66.2
-python-dateutil==2.9.0.post0
-pytz==2024.1
+tqdm>=4.66.2
+python-dateutil>=2.9.0.post0
+pytz>=2024.1
