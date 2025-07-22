@@ -2,40 +2,55 @@ import os
 from discord_webhook import DiscordWebhook, DiscordEmbed
 import pandas as pd
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 class DiscordNotifier:
     def __init__(self):
-        self.webhook_url = "https://canary.discord.com/api/webhooks/1396984814644629535/LAmcVGpVy70kGAXBw6bTIK48WB9PcIo3ZJw-0sOTE2YbjgKNNaam4V3kOsyCbF2MvYZy"
+        self.webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+        if not self.webhook_url:
+            raise ValueError("DISCORD_WEBHOOK_URL not set in .env")
         
     def create_embed(self):
         """Build rich Discord embed"""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
         embed = DiscordEmbed(
             title=f"📊 Jamaican Stock Report - {today}",
             color=0x00ff00  # Green
         )
         
         # Add market data
-        df = pd.read_csv(f"data/prices_{today}.csv")
+        prices_file = f"data/prices_{today}.csv"
         price_changes = []
-        for _, row in df.iterrows():
-            arrow = "▲" if float(row['Close']) > float(row['Open']) else "▼"
-            change = abs(float(row['Close']) - float(row['Open']))
-            price_changes.append(
-                f"{row['Symbol']}: {arrow}{change:.2f}% (${row['Close']})"
-            )
+        if os.path.exists(prices_file):
+            df = pd.read_csv(prices_file)
+            for _, row in df.iterrows():
+                try:
+                    open_price = float(row['Open'])
+                    close_price = float(row['Close'])
+                    change = ((close_price - open_price) / open_price) * 100 if open_price != 0 else 0
+                    arrow = "▲" if change > 0 else "▼"
+                    price_changes.append(
+                        f"{row['Symbol']}: {arrow}{abs(change):.2f}% (${close_price})"
+                    )
+                except (ValueError, ZeroDivisionError):
+                    price_changes.append(f"{row['Symbol']}: Invalid data")
         
         embed.add_embed_field(
             name="💹 Today's Movers",
-            value="\n".join(price_changes),
+            value="\n".join(price_changes) or "No price data available",
             inline=False
         )
         
         # Add social stats
+        twitter_count = len(pd.read_csv(f"data/twitter_{today}.csv")) if os.path.exists(f"data/twitter_{today}.csv") else 0
+        reddit_count = len(pd.read_csv(f"data/reddit_{today}.csv")) if os.path.exists(f"data/reddit_{today}.csv") else 0
         embed.add_embed_field(
             name="📱 Social Activity",
-            value=f"• {len(pd.read_csv(f'data/twitter_{today}.csv'))} Twitter mentions\n"
-                  f"• {len(pd.read_csv(f'data/reddit_{today}.csv'))} Reddit discussions",
+            value=f"• {twitter_count} Twitter mentions\n"
+                  f"• {reddit_count} Reddit discussions",
             inline=True
         )
         
@@ -49,11 +64,17 @@ class DiscordNotifier:
         webhook.add_embed(embed)
         
         # Attach latest report
-        with open(f"reports/report_{datetime.now().strftime('%Y-%m-%d')}.pdf", "rb") as f:
-            webhook.add_file(file=f.read(), filename='market_report.pdf')
+        report_file = "report.pdf"
+        if os.path.exists(report_file):
+            with open(report_file, "rb") as f:
+                webhook.add_file(file=f.read(), filename='market_report.pdf')
         
-        response = webhook.execute()
-        return response.status_code == 200
+        try:
+            response = webhook.execute()
+            return response.status_code == 200
+        except Exception as e:
+            print(f"❌ Failed to send Discord notification: {str(e)}")
+            return False
 
 if __name__ == "__main__":
     notifier = DiscordNotifier()
