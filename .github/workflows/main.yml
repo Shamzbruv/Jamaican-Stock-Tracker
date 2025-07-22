@@ -53,6 +53,10 @@ jobs:
           path: |
             data/*.csv
             report.pdf
+            price_chart.png
+            wordcloud.png
+            volume_chart.png
+            deepsite_data.json
             logs/*.log
           retention-days: 7
 
