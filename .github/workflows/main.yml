@@ -1,7 +1,7 @@
 name: Jamaican Stock Tracker
 on:
   schedule:
-    - cron: '0 18 * * 1-5'  # 1PM Jamaica time, Mon-Fri (when markets are open)
+    - cron: '0 17 * * 1-5'  # 12PM Jamaica time, Mon-Fri (market hours)
   workflow_dispatch:
 
 jobs:
@@ -38,6 +38,7 @@ jobs:
           name: stock-data-${{ github.run_id }}
           path: |
             data/*.csv
+            report.pdf
             logs/*.log
           retention-days: 7
 
@@ -53,16 +54,18 @@ jobs:
           body: |
             Jamaican Stock Tracker Report
             
-            - 📈 Processed ${{ steps.data.outputs.count }} records
+            - 📈 Processed data
             - 📝 View full logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
             
             See attached data files.
           to: ${{ secrets.EMAIL_USER }}
           from: GitHub Actions
-          attachments: data/*.csv
+          attachments: |
+            data/*.csv
+            report.pdf
 
       - name: Slack notification
-        if: always()  # Runs even if previous steps fail
+        if: always() && env.SLACK_WEBHOOK_URL
         uses: slackapi/slack-github-action@v1.24.0
         with:
           payload: |
@@ -79,4 +82,4 @@ jobs:
               ]
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}  # Optional
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
