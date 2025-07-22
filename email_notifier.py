@@ -4,12 +4,18 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 import os
 from datetime import datetime
+from dotenv import load_dotenv
 
 def send_email():
-    # === CONFIGURATION ===
-    EMAIL_USER = "your.email@gmail.com"  # REPLACE WITH YOUR EMAIL
-    EMAIL_PASSWORD = "your-app-password"  # REPLACE WITH 16-DIGIT APP PASSWORD
-    RECIPIENT_EMAIL = "your.email@gmail.com"  # REPLACE IF DIFFERENT
+    # Load environment variables
+    load_dotenv()
+    EMAIL_USER = os.getenv("EMAIL_USER")
+    EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+    RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", EMAIL_USER)
+    
+    if not all([EMAIL_USER, EMAIL_PASSWORD]):
+        print("❌ Email credentials not set in .env")
+        return
     
     # === EMAIL CONTENT ===
     msg = MIMEMultipart()
@@ -41,15 +47,14 @@ def send_email():
     today = datetime.now().strftime("%Y-%m-%d")
     files_to_attach = [
         f"data/prices_{today}.csv",
-        f"reports/report_{today}.pdf"
+        "report.pdf"
     ]
     
-    for file_path in files_to_attach:
-        if os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
-                part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
-                msg.attach(part)
+    for file_path in [f for f in files_to_attach if os.path.exists(f)]:
+        with open(file_path, "rb") as f:
+            part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+            msg.attach(part)
     
     # === SEND EMAIL ===
     try:
