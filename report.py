@@ -27,7 +27,7 @@ def generate_report():
     pdf.cell(0, 10, f"Jamaican Stock Report - {today}", 0, 1, "C")
     
     # Price chart
-    plt.figure(figsize=(12, 6)
+    plt.figure(figsize=(12, 6))
     prices["Close"] = pd.to_numeric(prices["Close"], errors="coerce").fillna(0)
     prices.plot(x="Symbol", y="Close", kind="bar", color="#1f77b4")
     plt.title("Stock Prices", pad=20)
