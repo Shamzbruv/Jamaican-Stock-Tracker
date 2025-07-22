@@ -21,6 +21,10 @@ prawcore>=2.4.0
 reportlab>=4.1.0
 fpdf2>=2.7.7
 
+# Data visualization
+matplotlib>=3.8.3
+wordcloud>=1.9.3
+
 # Utilities
 tqdm>=4.66.2
 python-dateutil>=2.9.0.post0
