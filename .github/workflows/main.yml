@@ -47,7 +47,7 @@ jobs:
           python notifier.py > logs/notifier_$(date +%Y%m%d).log 2>&1
 
       - name: Archive data
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: stock-data-${{ github.run_id }}
           path: |
