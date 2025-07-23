@@ -7,7 +7,7 @@ on:
 jobs:
   track:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Prevent hanging
+    timeout-minutes: 60  # Increased to 60 minutes
     env:
       TZ: America/Jamaica  # Set timezone for proper scheduling
       TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
@@ -53,10 +53,6 @@ jobs:
           path: |
             data/*.csv
             report.pdf
-            price_chart.png
-            wordcloud.png
-            volume_chart.png
-            deepsite_data.json
             logs/*.log
           retention-days: 7
 
