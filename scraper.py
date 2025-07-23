@@ -109,8 +109,7 @@ class Scraper:
 
         except Exception as e:
             logging.error(f"JamStockEx scrape failed: {str(e)}")
-            # Continue to next scraper instead of raising
-            return
+            raise
 
     def scrape_twitter(self):
         """Scrape Twitter for stock/CEO mentions"""
@@ -124,26 +123,28 @@ class Scraper:
             client = tweepy.Client(bearer_token=bearer_token)
             tweets_data = []
 
-            # Batch queries to reduce calls
-            stock_query = " OR ".join(STOCKS) + " lang:en -is:retweet -is:reply"
-            market_query = "Jamaica stock market OR JSE OR Kingston finance lang:en -is:retweet -is:reply"
+            # Build targeted search queries
+            queries = [
+                *[f"from:{ceo[2]} {stock}" for stock in STOCKS for ceo in CEOS.get(stock, []) if ceo[2].startswith('@')],
+                *[f"${stock} lang:en" for stock in STOCKS],
+                '"Jamaica stock market" OR "JSE" OR "Kingston finance"'
+            ]
 
-            for query in [stock_query, market_query]:
+            for query in queries:
                 self._rate_limit('twitter')
                 try:
                     tweets = client.search_recent_tweets(
-                        query=query,
-                        max_results=30,  # Further reduced to speed up
+                        query=query + " -is:retweet -is:reply",
+                        max_results=100,
                         tweet_fields=["created_at", "author_id", "public_metrics", "context_annotations"],
                         expansions=["author_id"]
                     )
 
                     if tweets.data:
                         for tweet in tweets.data:
-                            stock_match = next((s for s in STOCKS if s in tweet.text.upper()), "General")
                             tweets_data.append({
                                 "Platform": "Twitter",
-                                "Stock": stock_match,
+                                "Stock": next((s for s in STOCKS if s in query), "General"),
                                 "Author": f"user_{tweet.author_id}",
                                 "Text": tweet.text,
                                 "Likes": tweet.public_metrics["like_count"],
@@ -155,7 +156,7 @@ class Scraper:
                 except tweepy.TweepyException as e:
                     if "429" in str(e):  # Rate limit error
                         logging.error(f"Twitter rate limit hit for query '{query}', waiting...")
-                        time.sleep(5 * 60)  # 5-minute wait
+                        time.sleep(15 * 60)  # Wait 15 minutes
                         continue
                     logging.error(f"Twitter query '{query}' failed: {str(e)}")
                     continue
@@ -167,7 +168,7 @@ class Scraper:
 
         except Exception as e:
             logging.error(f"Twitter scrape failed: {str(e)}")
-            return  # Skip to next scraper
+            raise
 
     def scrape_reddit(self):
         """Scrape Reddit for stock discussions"""
@@ -180,35 +181,36 @@ class Scraper:
             )
 
             reddit_data = []
-            subreddits = ["investing"]  # Reduced to one subreddit to speed up
-            stock_query = " OR ".join(STOCKS + [ceo for ceos in CEOS.values() for ceo in ceos])
-            
-            self._rate_limit('reddit')
-            try:
-                for submission in reddit.subreddit("+".join(subreddits)).search(
-                    query=stock_query,
-                    limit=30,  # Further reduced to speed up
-                    sort="new",
-                    time_filter="month"
-                ):
-                    if submission.selftext and submission.selftext != "[deleted]":
-                        stock_match = next((s for s in STOCKS if s in submission.title.upper()), "General")
-                        reddit_data.append({
-                            "Platform": "Reddit",
-                            "Stock": stock_match,
-                            "Title": submission.title,
-                            "Content": submission.selftext,
-                            "Author": submission.author.name if submission.author else "[deleted]",
-                            "Subreddit": submission.subreddit.display_name,
-                            "Upvotes": submission.score,
-                            "Comments": submission.num_comments,
-                            "URL": f"https://reddit.com{submission.permalink}",
-                            "Timestamp": datetime.datetime.fromtimestamp(submission.created_utc).isoformat()
-                        })
+            subreddits = ["investing", "stocks"]  # Targeted subreddits
+            for stock in STOCKS:
+                self._rate_limit('reddit')
+                search_terms = f"{stock} OR {' OR '.join(CEOS.get(stock, []))}"
+                
+                for subreddit in subreddits:
+                    try:
+                        for submission in reddit.subreddit(subreddit).search(
+                            query=search_terms,
+                            limit=100,
+                            sort="new",
+                            time_filter="month"
+                        ):
+                            if submission.selftext and submission.selftext != "[deleted]":
+                                reddit_data.append({
+                                    "Platform": "Reddit",
+                                    "Stock": stock,
+                                    "Title": submission.title,
+                                    "Content": submission.selftext,
+                                    "Author": submission.author.name if submission.author else "[deleted]",
+                                    "Subreddit": submission.subreddit.display_name,
+                                    "Upvotes": submission.score,
+                                    "Comments": submission.num_comments,
+                                    "URL": f"https://reddit.com{submission.permalink}",
+                                    "Timestamp": datetime.datetime.fromtimestamp(submission.created_utc).isoformat()
+                                })
 
-            except Exception as e:
-                logging.error(f"Reddit search failed: {str(e)}")
-                return  # Skip to next scraper
+                    except Exception as e:
+                        logging.error(f"Reddit search for {stock} in r/{subreddit} failed: {str(e)}")
+                        continue
 
             if reddit_data:
                 df = pd.DataFrame(reddit_data)
@@ -217,7 +219,7 @@ class Scraper:
 
         except Exception as e:
             logging.error(f"Reddit scrape failed: {str(e)}")
-            return
+            raise
 
     def scrape_news(self):
         """Scrape Jamaican news sources"""
