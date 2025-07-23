@@ -123,19 +123,18 @@ class Scraper:
             client = tweepy.Client(bearer_token=bearer_token)
             tweets_data = []
 
-            # Build targeted search queries
+            # Optimized: Fewer queries to reduce time
             queries = [
-                *[f"from:{ceo[2]} {stock}" for stock in STOCKS for ceo in CEOS.get(stock, []) if ceo[2].startswith('@')],
-                *[f"${stock} lang:en" for stock in STOCKS],
-                '"Jamaica stock market" OR "JSE" OR "Kingston finance"'
+                "Jamaica stock market OR JSE OR Kingston finance lang:en -is:retweet -is:reply",
+                " (SCI OR DTC OR FESCO OR GHL OR TBCL OR DOLLA OR ONE OR TJH) lang:en -is:retweet -is:reply"
             ]
 
             for query in queries:
                 self._rate_limit('twitter')
                 try:
                     tweets = client.search_recent_tweets(
-                        query=query + " -is:retweet -is:reply",
-                        max_results=100,
+                        query=query,
+                        max_results=50,  # Reduced max_results to speed up
                         tweet_fields=["created_at", "author_id", "public_metrics", "context_annotations"],
                         expansions=["author_id"]
                     )
@@ -144,7 +143,7 @@ class Scraper:
                         for tweet in tweets.data:
                             tweets_data.append({
                                 "Platform": "Twitter",
-                                "Stock": next((s for s in STOCKS if s in query), "General"),
+                                "Stock": next((s for s in STOCKS if s in tweet.text.upper()), "General"),
                                 "Author": f"user_{tweet.author_id}",
                                 "Text": tweet.text,
                                 "Likes": tweet.public_metrics["like_count"],
@@ -156,7 +155,7 @@ class Scraper:
                 except tweepy.TweepyException as e:
                     if "429" in str(e):  # Rate limit error
                         logging.error(f"Twitter rate limit hit for query '{query}', waiting...")
-                        time.sleep(15 * 60)  # Wait 15 minutes
+                        time.sleep(5 * 60)  # Reduced wait time to 5 minutes
                         continue
                     logging.error(f"Twitter query '{query}' failed: {str(e)}")
                     continue
@@ -190,7 +189,7 @@ class Scraper:
                     try:
                         for submission in reddit.subreddit(subreddit).search(
                             query=search_terms,
-                            limit=100,
+                            limit=50,  # Reduced limit to speed up
                             sort="new",
                             time_filter="month"
                         ):
