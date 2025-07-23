@@ -7,7 +7,7 @@ on:
 jobs:
   track:
     runs-on: ubuntu-latest
-    timeout-minutes: 90  # Increased to 90 minutes
+    timeout-minutes: 120  # Increased to 120 minutes
     env:
       TZ: America/Jamaica  # Set timezone for proper scheduling
       TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
@@ -34,12 +34,24 @@ jobs:
           sudo apt-get install -y python3-dev libxml2-dev libxslt-dev  # For news parsing
 
       - name: Run scraper
+        id: scraper
+        continue-on-error: true
         run: |
           mkdir -p logs
-          timeout 85m python scraper.py > logs/scraper_$(date +%Y%m%d).log 2>&1 || echo "Scraper timed out, proceeding with available data"
-        timeout-minutes: 85  # Sub-step timeout
+          timeout 110m python scraper.py > logs/scraper_$(date +%Y%m%d).log 2>&1 || echo "Scraper timed out or failed, proceeding"
+        timeout-minutes: 110
+
+      - name: Check scraper success
+        if: steps.scraper.outcome != 'success'
+        run: |
+          echo "Scraper step failed or timed out. Checking logs..."
+          if ! grep -q "Saved" logs/scraper_$(date +%Y%m%d).log; then
+            echo "No data saved, skipping report generation"
+            exit 1
+          fi
 
       - name: Generate report
+        if: success() || steps.scraper.outcome == 'failure'  # Run even if scraper fails
         run: |
           python report.py > logs/report_$(date +%Y%m%d).log 2>&1
 
