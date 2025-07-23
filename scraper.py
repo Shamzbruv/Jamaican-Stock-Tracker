@@ -10,6 +10,7 @@ import feedparser
 from dotenv import load_dotenv
 import logging
 import logging.handlers
+import signal
 
 # Configure logging with rotation
 logging.basicConfig(
@@ -48,6 +49,12 @@ RATE_LIMITS = {
     'news': 30
 }
 
+class TimeoutException(Exception):
+    pass
+
+def timeout_handler(signum, frame):
+    raise TimeoutException("Function timed out after 10 minutes")
+
 class Scraper:
     def __init__(self):
         self.last_request = {
@@ -72,8 +79,10 @@ class Scraper:
         }
 
         try:
+            signal.alarm(600)  # 10-minute timeout
             response = requests.get(url, headers=headers, timeout=15)
             response.raise_for_status()
+            signal.alarm(0)
             
             soup = BeautifulSoup(response.text, "html.parser")
             table = soup.find("table", {"class": "trade-summary-table"})
@@ -107,9 +116,10 @@ class Scraper:
             df.to_csv(f"data/prices_{datetime.date.today()}.csv", index=False)
             logging.info(f"Saved JamStockEx data for {len(data)} stocks")
 
-        except Exception as e:
-            logging.error(f"JamStockEx scrape failed: {str(e)}")
-            raise
+        except (TimeoutException, Exception) as e:
+            logging.error(f"JamStockEx scrape failed or timed out: {str(e)}")
+            signal.alarm(0)  # Disable alarm
+            return
 
     def scrape_twitter(self):
         """Scrape Twitter for stock/CEO mentions"""
@@ -120,31 +130,30 @@ class Scraper:
             return
 
         try:
+            signal.alarm(600)  # 10-minute timeout
             client = tweepy.Client(bearer_token=bearer_token)
             tweets_data = []
 
-            # Build targeted search queries
-            queries = [
-                *[f"from:{ceo[2]} {stock}" for stock in STOCKS for ceo in CEOS.get(stock, []) if ceo[2].startswith('@')],
-                *[f"${stock} lang:en" for stock in STOCKS],
-                '"Jamaica stock market" OR "JSE" OR "Kingston finance"'
-            ]
+            # Simplified queries
+            stock_query = f"({' OR '.join(STOCKS)}) lang:en -is:retweet -is:reply"
+            market_query = "Jamaica stock market OR JSE OR Kingston finance lang:en -is:retweet -is:reply"
 
-            for query in queries:
+            for query in [stock_query, market_query]:
                 self._rate_limit('twitter')
                 try:
                     tweets = client.search_recent_tweets(
-                        query=query + " -is:retweet -is:reply",
-                        max_results=100,
-                        tweet_fields=["created_at", "author_id", "public_metrics", "context_annotations"],
+                        query=query,
+                        max_results=30,  # Reduced to speed up
+                        tweet_fields=["created_at", "author_id", "public_metrics"],
                         expansions=["author_id"]
                     )
 
                     if tweets.data:
                         for tweet in tweets.data:
+                            stock_match = next((s for s in STOCKS if s in tweet.text.upper()), "General")
                             tweets_data.append({
                                 "Platform": "Twitter",
-                                "Stock": next((s for s in STOCKS if s in query), "General"),
+                                "Stock": stock_match,
                                 "Author": f"user_{tweet.author_id}",
                                 "Text": tweet.text,
                                 "Likes": tweet.public_metrics["like_count"],
@@ -156,7 +165,7 @@ class Scraper:
                 except tweepy.TweepyException as e:
                     if "429" in str(e):  # Rate limit error
                         logging.error(f"Twitter rate limit hit for query '{query}', waiting...")
-                        time.sleep(15 * 60)  # Wait 15 minutes
+                        time.sleep(5 * 60)  # 5-minute wait
                         continue
                     logging.error(f"Twitter query '{query}' failed: {str(e)}")
                     continue
@@ -166,14 +175,16 @@ class Scraper:
                 df.to_csv(f"data/twitter_{datetime.date.today()}.csv", index=False)
                 logging.info(f"Saved {len(tweets_data)} Twitter mentions")
 
-        except Exception as e:
-            logging.error(f"Twitter scrape failed: {str(e)}")
-            raise
+        except (TimeoutException, Exception) as e:
+            logging.error(f"Twitter scrape failed or timed out: {str(e)}")
+            signal.alarm(0)  # Disable alarm
+            return
 
     def scrape_reddit(self):
         """Scrape Reddit for stock discussions"""
         logging.info("Starting Reddit scrape")
         try:
+            signal.alarm(600)  # 10-minute timeout
             reddit = praw.Reddit(
                 client_id=os.getenv("REDDIT_CLIENT_ID"),
                 client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
@@ -181,45 +192,45 @@ class Scraper:
             )
 
             reddit_data = []
-            subreddits = ["investing", "stocks"]  # Targeted subreddits
-            for stock in STOCKS:
-                self._rate_limit('reddit')
-                search_terms = f"{stock} OR {' OR '.join(CEOS.get(stock, []))}"
-                
-                for subreddit in subreddits:
-                    try:
-                        for submission in reddit.subreddit(subreddit).search(
-                            query=search_terms,
-                            limit=100,
-                            sort="new",
-                            time_filter="month"
-                        ):
-                            if submission.selftext and submission.selftext != "[deleted]":
-                                reddit_data.append({
-                                    "Platform": "Reddit",
-                                    "Stock": stock,
-                                    "Title": submission.title,
-                                    "Content": submission.selftext,
-                                    "Author": submission.author.name if submission.author else "[deleted]",
-                                    "Subreddit": submission.subreddit.display_name,
-                                    "Upvotes": submission.score,
-                                    "Comments": submission.num_comments,
-                                    "URL": f"https://reddit.com{submission.permalink}",
-                                    "Timestamp": datetime.datetime.fromtimestamp(submission.created_utc).isoformat()
-                                })
+            subreddits = ["investing"]  # Reduced to one subreddit
+            stock_query = " OR ".join(STOCKS + [ceo for ceos in CEOS.values() for ceo in ceos])
 
-                    except Exception as e:
-                        logging.error(f"Reddit search for {stock} in r/{subreddit} failed: {str(e)}")
-                        continue
+            self._rate_limit('reddit')
+            try:
+                for submission in reddit.subreddit("investing").search(
+                    query=stock_query,
+                    limit=30,  # Reduced to speed up
+                    sort="new",
+                    time_filter="week"  # Shortened to week
+                ):
+                    if submission.selftext and submission.selftext != "[deleted]":
+                        stock_match = next((s for s in STOCKS if s in submission.title.upper()), "General")
+                        reddit_data.append({
+                            "Platform": "Reddit",
+                            "Stock": stock_match,
+                            "Title": submission.title,
+                            "Content": submission.selftext,
+                            "Author": submission.author.name if submission.author else "[deleted]",
+                            "Subreddit": submission.subreddit.display_name,
+                            "Upvotes": submission.score,
+                            "Comments": submission.num_comments,
+                            "URL": f"https://reddit.com{submission.permalink}",
+                            "Timestamp": datetime.datetime.fromtimestamp(submission.created_utc).isoformat()
+                        })
+
+            except Exception as e:
+                logging.error(f"Reddit search failed: {str(e)}")
+                return
 
             if reddit_data:
                 df = pd.DataFrame(reddit_data)
                 df.to_csv(f"data/reddit_{datetime.date.today()}.csv", index=False)
                 logging.info(f"Saved {len(reddit_data)} Reddit posts")
 
-        except Exception as e:
-            logging.error(f"Reddit scrape failed: {str(e)}")
-            raise
+        except (TimeoutException, Exception) as e:
+            logging.error(f"Reddit scrape failed or timed out: {str(e)}")
+            signal.alarm(0)  # Disable alarm
+            return
 
     def scrape_news(self):
         """Scrape Jamaican news sources"""
@@ -227,31 +238,37 @@ class Scraper:
         feedparser.PARSE_TIMEOUT = 10  # Set timeout for RSS parsing
         news_data = []
         
-        for url in NEWS_SOURCES:
-            self._rate_limit('news')
-            try:
-                feed = feedparser.parse(url)
-                if feed.bozo:
-                    logging.error(f"Invalid feed {url}: {feed.bozo_exception}")
+        try:
+            signal.alarm(600)  # 10-minute timeout
+            for url in NEWS_SOURCES:
+                self._rate_limit('news')
+                try:
+                    feed = feedparser.parse(url)
+                    if feed.bozo:
+                        logging.error(f"Invalid feed {url}: {feed.bozo_exception}")
+                        continue
+                    for entry in feed.entries:
+                        for stock in STOCKS:
+                            if (stock.lower() in entry.title.lower() or 
+                                any(ceo.lower() in entry.title.lower() for ceo in CEOS.get(stock, [])) or
+                                stock.lower() in entry.get("summary", "").lower()):
+                                news_data.append({
+                                    "Platform": "News",
+                                    "Source": feed.feed.get("title", url),
+                                    "Stock": stock,
+                                    "Title": entry.title,
+                                    "Summary": entry.get("summary", ""),
+                                    "Published": entry.get("published", ""),
+                                    "URL": entry.link,
+                                    "Timestamp": datetime.datetime.now().isoformat()
+                                })
+                except Exception as e:
+                    logging.error(f"Failed to parse {url}: {str(e)}")
                     continue
-                for entry in feed.entries:
-                    for stock in STOCKS:
-                        if (stock.lower() in entry.title.lower() or 
-                            any(ceo.lower() in entry.title.lower() for ceo in CEOS.get(stock, [])) or
-                            stock.lower() in entry.get("summary", "").lower()):
-                            news_data.append({
-                                "Platform": "News",
-                                "Source": feed.feed.get("title", url),
-                                "Stock": stock,
-                                "Title": entry.title,
-                                "Summary": entry.get("summary", ""),
-                                "Published": entry.get("published", ""),
-                                "URL": entry.link,
-                                "Timestamp": datetime.datetime.now().isoformat()
-                            })
-            except Exception as e:
-                logging.error(f"Failed to parse {url}: {str(e)}")
-                continue
+        except TimeoutException:
+            logging.error("News scrape timed out")
+        finally:
+            signal.alarm(0)  # Disable alarm
 
         if news_data:
             df = pd.DataFrame(news_data)
@@ -260,6 +277,7 @@ class Scraper:
 
     def run_all(self):
         """Execute all scrapers with error handling"""
+        signal.signal(signal.SIGALRM, timeout_handler)
         try:
             self.scrape_jamstockex()
             self.scrape_twitter()
@@ -268,6 +286,8 @@ class Scraper:
         except Exception as e:
             logging.critical(f"Fatal error in scraper: {str(e)}")
             raise
+        finally:
+            signal.alarm(0)  # Ensure alarm is disabled
 
 if __name__ == "__main__":
     scraper = Scraper()
